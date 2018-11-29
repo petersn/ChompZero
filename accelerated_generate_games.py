@@ -6,6 +6,9 @@ import numpy as np
 import engine
 import link
 
+BOARD_SIZE = 16
+FEATURE_COUNT = 2
+
 parser = argparse.ArgumentParser(
 	description="""
 		Generates self-play games into the .json format using the C++ MCTS implementation.
@@ -18,13 +21,14 @@ parser.add_argument("--network", metavar="PATH", required=True, help="Path of th
 parser.add_argument("--output-games", metavar="PATH", required=True, help="Path to write .json games to. Writes in append mode, so it won't overwrite existing games.")
 parser.add_argument("--visits", metavar="N", type=int, default=100, help="At each move in the self-play games perform MCTS until the root node has N visits.")
 parser.add_argument("--buffer-size", metavar="N", type=int, default=128, help="Use a buffer that evaluates N samples in parallel on the GPU. Requires that we launch 2*N threads each playing a parallel game, and thus have memory usage proportional to N.")
+parser.add_argument("--randomize", action="store_true", help="Completely zero out the policy logits so the play is under a uniformly random policy.")
 args = parser.parse_args()
 print "Arguments:", args
 
 engine.initialize_model(args.network)
 
 work_buffers = [
-	np.zeros((args.buffer_size, 7, 7, 4), dtype=np.float32)
+	np.zeros((args.buffer_size, BOARD_SIZE, BOARD_SIZE, FEATURE_COUNT), dtype=np.float32)
 	for _ in (0, 1)
 ]
 link.launch_threads(
@@ -65,6 +69,10 @@ while True:
 	assert posteriors.flags.c_contiguous
 	assert values.dtype == np.float32
 	assert values.flags.c_contiguous
+
+	if args.randomize:
+		posteriors *= 0.0
+
 	recent_arrays.append((posteriors, values))
 	# XXX: TODO: Worry a lot about whether or not `work_buffers`, `posteriors` and `values` are packed contiguously with the right stride ordering!
 	# I don't currently check this, and this is really important.

@@ -1,34 +1,44 @@
 #!/usr/bin/python
 
+import os
 import numpy as np
 import tensorflow as tf
 
 #DTYPE = tf.float16
 DTYPE = tf.float32
 
-class ResNet:
+class Network:
 	INPUT_FEATURE_COUNT = 2
 	FILTERS = 32
 	CONV_SIZE = 3
 	BLOCK_COUNT = 8
-	OUTPUT_SOFTMAX_COUNT = 16 * 16
+	BOARD_SIZE = 16
+	FINAL_FILTERS = 2
+	OUTPUT_SOFTMAX_COUNT = BOARD_SIZE * BOARD_SIZE
 
-	def __init__(self, scope_name):
+	def __init__(self, scope_name, build_training=False):
 		with tf.variable_scope(scope_name):
 			self.build_graph()
-			with tf.variable_scope("training"):
-				self.build_training()
+			if build_training:
+				with tf.variable_scope("training"):
+					self.build_training()
+		self.total_parameters = sum(np.product(var.shape) for var in tf.trainable_variables())
 
 	def build_graph(self):
 		self.input_ph = tf.placeholder(
 			dtype=DTYPE,
-			shape=[None, 19, 19, self.INPUT_FEATURE_COUNT],
+			shape=[None, self.BOARD_SIZE, self.BOARD_SIZE, self.INPUT_FEATURE_COUNT],
 			name="input_ph",
 		)
 		self.desired_policy_ph = tf.placeholder(
 			dtype=DTYPE,
-			shape=[None, 19, 19],
+			shape=[None, self.BOARD_SIZE, self.BOARD_SIZE],
 			name="desired_policy_ph",
+		)
+		self.desired_value_ph = tf.placeholder(
+			dtype=DTYPE,
+			shape=[None, 1],
+			name="desired_value_ph",
 		)
 		self.learning_rate_ph = tf.placeholder(
 			dtype=DTYPE,
@@ -52,24 +62,44 @@ class ResNet:
 		for i in xrange(self.BLOCK_COUNT):
 			with tf.variable_scope("block%i" % i):
 				self.stack_block()
-		# Stack a final batch-unnormalized 1x1 convolution.
-		self.stack_convolution(1, self.FILTERS, 1, batch_normalization=False)
+		# Stack a final batch-unnormalized 1x1 convolution down to some given number of filters.
+		# The first feature is the policy layer, while the remaining are features for value head computation.
+		self.stack_convolution(1, self.FILTERS, self.FINAL_FILTERS, batch_normalization=False)
+		#assert self.flow.shape == [None, self.BOARD_SIZE, self.BOARD_SIZE, self.FINAL_FILTERS]
+		self.policy_output = tf.reshape(self.flow[:,:,:,0], [-1, self.BOARD_SIZE, self.BOARD_SIZE])
+
+		self.build_value_head()
+
+	def build_value_head(self):
+		with tf.variable_scope("value_head"):
+			x = tf.reshape(self.flow, [-1, self.BOARD_SIZE * self.BOARD_SIZE * self.FINAL_FILTERS])
+			x = tf.layers.dense(x, 32, activation="relu")
+			self.value_output = tf.layers.dense(x, 1, activation="tanh")
 
 	def build_training(self):
-		# Construct the training components.
-		self.flattened = tf.reshape(self.flow, [-1, self.OUTPUT_SOFTMAX_COUNT])
+		# Make policy head loss.
+		self.flattened = tf.reshape(self.policy_output, [-1, self.OUTPUT_SOFTMAX_COUNT])
 		self.flattened_desired_output = tf.reshape(self.desired_policy_ph, [-1, self.OUTPUT_SOFTMAX_COUNT])
-		self.cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
+		self.policy_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
 			labels=self.flattened_desired_output,
 			logits=self.flattened,
 		))
 
-		tf.summary.scalar("cross_entropy", self.cross_entropy)
+		tf.summary.scalar("policy_loss", self.policy_loss)
 
+		# Make value head loss.
+		self.value_loss = tf.reduce_mean(tf.square(self.desired_value_ph - self.value_output))
+		tf.summary.scalar("value_loss", self.value_loss)
+
+		# Make regularization loss.
 		regularizer = tf.contrib.layers.l2_regularizer(scale=0.0001)
 		reg_variables = tf.trainable_variables()
-		self.regularization_term = tf.contrib.layers.apply_regularization(regularizer, reg_variables)
-		self.loss = self.cross_entropy + self.regularization_term
+		self.regularization_loss = tf.contrib.layers.apply_regularization(regularizer, reg_variables)
+
+		tf.summary.scalar("regularization_loss", self.regularization_loss)
+
+		# Loss is the sum of these three.
+		self.loss = 1.0 * self.policy_loss + self.value_loss + self.regularization_loss
 
 		correct = tf.equal(
 			tf.argmax(self.flattened, 1),
@@ -140,15 +170,28 @@ class ResNet:
 		# Stack on the deferred non-linearity.
 		self.stack_nonlinearity()
 
+SAVE_SUFFIX = "model.ckpt"
+
+def save_model(sess, path):
+	try:
+		os.mkdir(path)
+	except OSError:
+		pass
+	saver = tf.train.Saver()
+	saver.save(sess, os.path.join(path, SAVE_SUFFIX))
+
+def load_model(sess, path):
+	saver = tf.train.Saver()
+	saver.restore(sess, os.path.join(path, SAVE_SUFFIX))
+
 if __name__ == "__main__":
 	# Count network parameters.
-	net = ResNet("net/")
+	net = Network("net/")
 	print
 	print "Filters:", net.FILTERS
 	print "Block count:", net.BLOCK_COUNT
 
 	for var in tf.trainable_variables():
 		print var
-	parameter_count = sum(np.product(var.shape) for var in tf.trainable_variables())
-	print "Parameter count:", parameter_count
+	print "Parameter count:", net.total_parameters
 

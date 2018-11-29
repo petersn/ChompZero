@@ -16,12 +16,9 @@
 #include <cassert>
 
 #include <json.hpp>
-#include "movegen.hpp"
-#include "makemove.hpp"
-#include "other.hpp"
+#include "chomp_rules.h"
 
-#define STARTING_GAME_POSITION "x5o/7/3-3/2-1-2/3-3/7/o5x x"
-#define ONE_RANDOM_MOVE
+//#define ONE_RANDOM_MOVE
 
 using json = nlohmann::json;
 using std::shared_ptr;
@@ -32,10 +29,11 @@ constexpr double exploration_parameter = 1.0;
 constexpr double dirichlet_alpha = 0.15;
 constexpr double dirichlet_weight = 0.25;
 constexpr int maximum_game_plies = 400;
-//const std::vector<double> opening_randomization_schedule {
-//	0.2, 0.2, 0.1, 0.1, 0.05, 0.05, 0.025, 0.025, 0.0125, 0.0125,
-//};
 
+constexpr int FEATURES_SIZE = BOARD_SIZE * BOARD_SIZE * 2;
+constexpr int POSTERIOR_SIZE = BOARD_SIZE * BOARD_SIZE;
+
+// Ugh, I hate the 32-bit seeding here... :(
 std::random_device rd;
 std::default_random_engine generator(rd());
 
@@ -45,11 +43,11 @@ struct StopWorking : public std::exception {};
 // Configuration.
 int global_visits;
 
-// Extend Move with a hash.
+// Extend ChompMove with a hash.
 namespace std {
-	template<> struct hash<Move> {
-		size_t operator()(const Move& m) const {
-			return m.from + m.to * 49;
+	template<> struct hash<ChompMove> {
+		size_t operator()(const ChompMove& m) const {
+			return static_cast<size_t>(m.x) + static_cast<size_t>(m.y) * BOARD_SIZE;
 		}
 	};
 }
@@ -73,74 +71,15 @@ public:
 	}
 };
 
-// Map that maps an (x, y) coordinate delta into a layer index in an encoded posterior.
-std::unordered_map<std::pair<int, int>, int, pair_hash> position_delta_layers {
-	{{-2, -2},  0}, {{-2, -1},  1},
-	{{-2,  0},  2}, {{-2,  1},  3},
-	{{-2,  2},  4}, {{-1, -2},  5},
-	{{-1,  2},  6}, {{ 0, -2},  7},
-	{{ 0,  2},  8}, {{ 1, -2},  9},
-	{{ 1,  2}, 10}, {{ 2, -2}, 11},
-	{{ 2, -1}, 12}, {{ 2,  0}, 13},
-	{{ 2,  1}, 14}, {{ 2,  2}, 15},
-};
-
-std::vector<int> serialize_board_for_json(const Position& board) {
+std::vector<int> serialize_board_for_json(const ChompState& board) {
 	std::vector<int> result;
-	for (int y = 0; y < 7; y++) {
-		for (int x = 0; x < 7; x++) {
-			int square = x + 7 * (6 - y);
-			uint64_t mask = 1ull << square;
-			bool cross_present   = board.pieces[PIECE::CROSS]  & mask;
-			bool nought_present  = board.pieces[PIECE::NOUGHT] & mask;
-			if (cross_present) {
-				result.push_back(1);
-			} else if (nought_present) {
-				result.push_back(2);
-			} else {
-				result.push_back(0);
-			}
-		}
-	}
-	assert(result.size() == 7 * 7);
+	for (ChompInt y = 0; y < BOARD_SIZE; y++)
+		result.push_back(board.limits[y]);
 	return result;
 }
 
-int get_board_result(const Position& board, Move* optional_moves_buffer=nullptr, int* optional_moves_count=nullptr) {
-	int p1_pieces = popcountll(board.pieces[PIECE::CROSS]);
-	int p2_pieces = popcountll(board.pieces[PIECE::NOUGHT]);
-	int blockers  = popcountll(board.blockers);
-	int empty_cells = 7 * 7 - p1_pieces - p2_pieces - blockers;
-	// Assert that at least one player has any pieces.
-	assert(not (p1_pieces == 0 and p2_pieces == 0));
-	assert(p1_pieces + p2_pieces + blockers <= 7 * 7);
-	// If either player has no pieces then the other player wins.
-	if (p1_pieces == 0)
-		return 2;
-	if (p2_pieces == 0)
-		return 1;
-	// If the current player has no moves then adjudicate as though the other player owns every cell.
-	Move moves_buffer[256];
-	if (optional_moves_buffer == nullptr)
-		optional_moves_buffer = moves_buffer;
-	int num_moves = movegen(board, optional_moves_buffer);
-	if (optional_moves_count != nullptr)
-		*optional_moves_count = num_moves;
-	if (num_moves == 0) {
-		if (board.turn == SIDE::CROSS)
-			p2_pieces += empty_cells;
-		if (board.turn == SIDE::NOUGHT)
-			p1_pieces += empty_cells;
-	}
-	assert(p1_pieces + p2_pieces + blockers <= 7 * 7);
-	// If the board is full then adjudicate a win by who has more pieces.
-	if (p1_pieces + p2_pieces + blockers == 7 * 7) {
-		assert(p1_pieces != p2_pieces);
-		return p1_pieces < p2_pieces ? 2 : 1;
-	}
-	assert(num_moves != 0); // If there are no moves then we must adjudicate one way or the other.
-	// Finally, if none of the above cases matched, then the game isn't finished yet.
-	return 0;
+int get_board_result(const ChompState& board) {
+	return static_cast<int>(board.winner);
 }
 
 std::pair<const float*, double> request_evaluation(int thread_id, const float* feature_string);
@@ -148,16 +87,14 @@ std::pair<const float*, double> request_evaluation(int thread_id, const float* f
 struct Evaluations {
 	bool game_over;
 	double value;
-	std::unordered_map<Move, double> posterior;
+	std::unordered_map<ChompMove, double> posterior;
 
-	void populate(int thread_id, const Position& board, bool use_dirichlet_noise) {
+	void populate(int thread_id, const ChompState& board, bool use_dirichlet_noise) {
 		// Completely reset the evaluation.
 		posterior.clear();
 		game_over = false;
 
-		Move moves_buffer[256];
-		int num_moves;
-		int result = get_board_result(board, moves_buffer, &num_moves);
+		int result = get_board_result(board);
 
 		if (result != 0) {
 			game_over = true;
@@ -166,38 +103,19 @@ struct Evaluations {
 			value = result == 1 ? 1.0 : -1.0;
 			// Flip the value to be from the perspective of the current player.
 			// TODO: XXX: Validate that I got this the right way around.
-			if (board.turn == SIDE::NOUGHT)
+			if (board.to_move == Player::PLAYER2)
 				value *= -1;
 			return;
 		}
 
 		// Build a features map, initialized to all zeros.
-		float feature_buffer[7 * 7 * 4] = {};
-		for (int y = 0; y < 7; y++) {
-			for (int x = 0; x < 7; x++) {
+		float feature_buffer[FEATURES_SIZE] = {};
+		for (int y = 0; y < BOARD_SIZE; y++) {
+			for (int x = 0; x < BOARD_SIZE; x++) {
 				// Fill in layer 0 with all ones.
-				feature_buffer[stride_index<7, 7, 4>(x, y, 0)] = 1.0;
-
-				int square = x + 7 * (6 - y);
-				uint64_t mask = 1ull << square;
-				bool cross_present   = board.pieces[PIECE::CROSS]  & mask;
-				bool nought_present  = board.pieces[PIECE::NOUGHT] & mask;
-				bool blocker_present = board.blockers              & mask;
-
-				bool piece_present = cross_present or nought_present;
-				bool current_player_piece =
-					(board.turn == SIDE::CROSS and cross_present) or
-					(board.turn == SIDE::NOUGHT and nought_present);
-				// If there is a piece of the (player to move)'s then write a 1 to layer 1, otherwise to layer 2.
-				if (piece_present) {
-					if (current_player_piece)
-						feature_buffer[stride_index<7, 7, 4>(x, y, 1)] = 1.0;
-					else
-						feature_buffer[stride_index<7, 7, 4>(x, y, 2)] = 1.0;
-				}
-				// If there's a blocker write to layer 3.
-				if (blocker_present)
-					feature_buffer[stride_index<7, 7, 4>(x, y, 3)] = 1.0;
+				feature_buffer[stride_index<BOARD_SIZE, BOARD_SIZE, 2>(x, y, 0)] = 1.0;
+				if (board.is_cell_filled({x, y}))
+					feature_buffer[stride_index<BOARD_SIZE, BOARD_SIZE, 2>(x, y, 1)] = 1.0;
 			}
 		}
 
@@ -206,40 +124,31 @@ struct Evaluations {
 		value = request_result.second;
 
 		// Softmax the posterior array.
-		double softmaxed[7 * 7 * 17];
-		for (int i = 0; i < (7 * 7 * 17); i++)
+		double softmaxed[BOARD_SIZE * BOARD_SIZE];
+		for (int i = 0; i < BOARD_SIZE * BOARD_SIZE; i++)
 			softmaxed[i] = exp(posterior_array[i]);
 		double total = 0.0;
-		for (int i = 0; i < (7 * 7 * 17); i++)
+		for (int i = 0; i < BOARD_SIZE * BOARD_SIZE; i++)
 			total += softmaxed[i];
 		if (total != 0.0) {
-			for (int i = 0; i < (7 * 7 * 17); i++)
+			for (int i = 0; i < BOARD_SIZE * BOARD_SIZE; i++)
 				softmaxed[i] /= total;
 		}
+
+		ChompMove moves_buffer[MAX_MOVE_COUNT];
+		int num_moves = board.legal_moves(moves_buffer);
 
 		// Evaluate movegen.
 		double total_probability = 0.0;
 		for (int i = 0; i < num_moves; i++) {
-			Move& move = moves_buffer[i];
-			int from_x = move.from % 7;
-			int from_y = move.from / 7;
-			int to_x   = move.to   % 7;
-			int to_y   = move.to   / 7;
-			from_y = 6 - from_y;
-			to_y   = 6 - to_y;
-			double probability;
-			if (is_single(move)) {
-				probability = softmaxed[stride_index<7, 7, 17>(to_x, to_y, 16)];
-			} else {
-				std::pair<int, int> delta{to_x - from_x, to_y - from_y};
-				int layer_index = position_delta_layers.at(delta);
-				probability = softmaxed[stride_index<7, 7, 17>(to_x, to_y, layer_index)];
-			}
+			ChompMove& move = moves_buffer[i];
+			double probability = softmaxed[stride_index<BOARD_SIZE, BOARD_SIZE, 1>(move.x, move.y, 0)];
 			posterior.insert({move, probability});
 			total_probability += probability;
 		}
 		// Normalize the posterior.
 		if (total_probability != 0.0) {
+//			cout << "Total prob: " << total_probability << " Move count:" << num_moves << endl;
 			for (auto& p : posterior)
 				p.second /= total_probability;
 		}
@@ -276,13 +185,13 @@ struct MCTSEdge;
 struct MCTSNode;
 
 struct MCTSEdge {
-	Move edge_move;
+	ChompMove edge_move;
 	MCTSNode* parent_node;
 	shared_ptr<MCTSNode> child_node;
 	double edge_visits = 0;
 	double edge_total_score = 0;
 
-	MCTSEdge(Move edge_move, MCTSNode* parent_node, shared_ptr<MCTSNode> child_node)
+	MCTSEdge(ChompMove edge_move, MCTSNode* parent_node, shared_ptr<MCTSNode> child_node)
 		: edge_move(edge_move), parent_node(parent_node), child_node(child_node) {}
 
 	double get_edge_score() const {
@@ -298,16 +207,16 @@ struct MCTSEdge {
 };
 
 struct MCTSNode {
-	Position board;
+	ChompState board;
 	bool evals_populated = false;
 	Evaluations evals;
 	shared_ptr<MCTSNode> parent;
 	int all_edge_visits = 0;
-	std::unordered_map<Move, MCTSEdge> outgoing_edges;
+	std::unordered_map<ChompMove, MCTSEdge> outgoing_edges;
 
-	MCTSNode(const Position& board) : board(board) {}
+	MCTSNode(const ChompState& board) : board(board) {}
 
-	double total_action_score(const Move& m) {
+	double total_action_score(const ChompMove& m) {
 		assert(evals_populated);
 		const auto it = outgoing_edges.find(m);
 		double u_score, Q_score;
@@ -330,7 +239,7 @@ struct MCTSNode {
 		evals_populated = true;
 	}
 
-	Move select_action() {
+	ChompMove select_action() {
 		assert(evals_populated);
 		// If we have no legal moves then return a null move.
 		if (evals.posterior.size() == 0)
@@ -339,7 +248,7 @@ struct MCTSNode {
 		if (evals.game_over)
 			return NO_MOVE;
 		// Find the best move according to total_action_score.
-		Move best_move = NO_MOVE;
+		ChompMove best_move = NO_MOVE;
 		double best_score = -1;
 		bool flag = false;
 		for (const auto p : evals.posterior) {
@@ -368,25 +277,25 @@ struct MCTSNode {
 
 struct MCTS {
 	int thread_id;
-	Position root_board;
+	ChompState root_board;
 	bool use_dirichlet_noise;
 	shared_ptr<MCTSNode> root_node;
 
-	MCTS(int thread_id, const Position& root_board, bool use_dirichlet_noise)
+	MCTS(int thread_id, const ChompState& root_board, bool use_dirichlet_noise)
 		: thread_id(thread_id), root_board(root_board), use_dirichlet_noise(use_dirichlet_noise)
 	{
 		init_from_scratch(root_board);
 	}
 
-	void init_from_scratch(const Position& root_board) {
+	void init_from_scratch(const ChompState& root_board) {
 		root_node = std::make_shared<MCTSNode>(root_board);
 		root_node->populate_evals(thread_id, use_dirichlet_noise);
 	}
 
-	std::tuple<shared_ptr<MCTSNode>, Move, std::vector<MCTSEdge*>> select_principal_variation(bool best=false) {
+	std::tuple<shared_ptr<MCTSNode>, ChompMove, std::vector<MCTSEdge*>> select_principal_variation(bool best=false) {
 		shared_ptr<MCTSNode> node = root_node;
 		std::vector<MCTSEdge*> edges_on_path;
-		Move move = NO_MOVE;
+		ChompMove move = NO_MOVE;
 		while (true) {
 			if (best) {
 				// Pick the edge that has the highest visit count.
@@ -394,8 +303,8 @@ struct MCTS {
 					node->outgoing_edges.begin(),
 					node->outgoing_edges.end(),
 					[](
-						const std::pair<Move, MCTSEdge>& a,
-						const std::pair<Move, MCTSEdge>& b
+						const std::pair<ChompMove, MCTSEdge>& a,
+						const std::pair<ChompMove, MCTSEdge>& b
 					) {
 						return a.second.edge_visits < b.second.edge_visits;
 					}
@@ -421,15 +330,15 @@ struct MCTS {
 		auto triple = select_principal_variation();
 		// Darn, I wish I had structured bindings already. :(
 		shared_ptr<MCTSNode>         leaf_node     = std::get<0>(triple);
-		Move                         move          = std::get<1>(triple);
+		ChompMove                         move          = std::get<1>(triple);
 		std::vector<MCTSEdge*>       edges_on_path = std::get<2>(triple);
 
 		shared_ptr<MCTSNode> new_node;
 
 		// 2) If the move is non-null then expand once at the leaf.
 		if (move != NO_MOVE) {
-			Position new_board = leaf_node->board;
-			makemove(new_board, move);
+			ChompState new_board = leaf_node->board;
+			new_board.apply_move(move);
 			new_node = std::make_shared<MCTSNode>(new_board);
 			auto pair_it_success = leaf_node->outgoing_edges.insert({
 				move,
@@ -453,31 +362,31 @@ struct MCTS {
 			MCTSEdge& edge = **it;
 			inverted = not inverted;
 			value_score = 1.0 - value_score;
-			assert(inverted == (edge.parent_node->board.turn != new_node->board.turn));
+			assert(inverted == (edge.parent_node->board.to_move != new_node->board.to_move));
 			edge.adjust_score(value_score);
 			edge.parent_node->all_edge_visits++;
 		}
 		if (edges_on_path.size() == 0) {
 			cout << ">>> No edges on path!" << endl;
-			print(root_board, true);
+			cout << root_board;
 			cout << "Valid moves list:" << endl;
 			print_moves(root_board);
 			cout << "Select action at root:" << endl;
-			Move selected_action = root_node->select_action();
+			ChompMove selected_action = root_node->select_action();
 			cout << "Posterior length:" << root_node->evals.posterior.size() << endl;
 			cout << "Game over:" << root_node->evals.game_over << endl;
-			cout << "Here it is: " << selected_action.from << " " << selected_action.to << endl;
-			cout << ">>> Move:" << move.from << " " << move.to << endl;
+			cout << "Here it is: " << selected_action << endl;
+			cout << ">>> Move:" << move << endl;
 		}
 		assert(edges_on_path.size() != 0);
 	}
 
-	void play(Move move) {
+	void play(ChompMove move) {
 		// See if the move is in our root node's outgoing edges.
 		auto it = root_node->outgoing_edges.find(move);
 		// If we miss, just throw away everything and init from scratch.
 		if (it == root_node->outgoing_edges.end()) {
-			makemove(root_board, move);
+			root_board.apply_move(move);
 			init_from_scratch(root_board);
 			return;
 		}
@@ -492,9 +401,9 @@ struct MCTS {
 	}
 };
 
-Move sample_proportionally_to_visits(const shared_ptr<MCTSNode>& node) {
+ChompMove sample_proportionally_to_visits(const shared_ptr<MCTSNode>& node) {
 	double x = std::uniform_real_distribution<float>{0, 1}(generator);
-	for (const std::pair<Move, MCTSEdge>& p : node->outgoing_edges) {
+	for (const std::pair<ChompMove, MCTSEdge>& p : node->outgoing_edges) {
 		double weight = p.second.edge_visits / node->all_edge_visits;
 		if (x <= weight)
 			return p.first;
@@ -505,9 +414,18 @@ Move sample_proportionally_to_visits(const shared_ptr<MCTSNode>& node) {
 	return (*node->outgoing_edges.begin()).first;
 }
 
+ChompState make_initial_board() {
+	// For now always just be BOARD_SIZE x BOARD_SIZE and fully empty.
+	// Later I might want to randomly cut off some rows and columns at the beginning.
+	return make_empty_state();
+}
+
+std::string move_for_json(const ChompMove& m) {
+	return std::to_string(m.x) + "," + std::to_string(m.y);
+}
+
 json generate_game(int thread_id) {
-	Position board;
-	set_board(board, STARTING_GAME_POSITION);
+	ChompState board = make_initial_board();
 	MCTS mcts(thread_id, board, true);
 	json entry = {{"boards", {}}, {"moves", {}}, {"dists", {}}};
 	int steps_done = 0;
@@ -524,7 +442,7 @@ json generate_game(int thread_id) {
 			steps_done++;
 		}
 		// Sample a move according to visit counts.
-		Move selected_move = sample_proportionally_to_visits(mcts.root_node);
+		ChompMove selected_move = sample_proportionally_to_visits(mcts.root_node);
 
 #ifdef ONE_RANDOM_MOVE
 		// If we're AT the randomization point then instead pick a uniformly random legal move.
@@ -542,7 +460,7 @@ json generate_game(int thread_id) {
 		// If we're AFTER the randomization point then pick the best move we found.
 		if (ply > random_ply) {
 			int most_visits = -1;
-			for (const std::pair<Move, MCTSEdge>& p : mcts.root_node->outgoing_edges) {
+			for (const std::pair<ChompMove, MCTSEdge>& p : mcts.root_node->outgoing_edges) {
 				if (p.second.edge_visits > most_visits) {
 					selected_move = p.first;
 					most_visits = p.second.edge_visits;
@@ -563,12 +481,12 @@ json generate_game(int thread_id) {
 		}
 */
 		entry["boards"].push_back(serialize_board_for_json(mcts.root_board));
-		entry["moves"].push_back(move_string(selected_move));
+		entry["moves"].push_back(move_for_json(selected_move));
 		entry["dists"].push_back({});
 		// Write out the entire visit distribution.
-		for (const std::pair<Move, MCTSEdge>& p : mcts.root_node->outgoing_edges) {
+		for (const std::pair<ChompMove, MCTSEdge>& p : mcts.root_node->outgoing_edges) {
 			double weight = p.second.edge_visits / mcts.root_node->all_edge_visits;
-			entry["dists"].back()[move_string(p.first)] = weight;
+			entry["dists"].back()[move_for_json(p.first)] = weight;
 		}
 		mcts.play(selected_move);
 		if (get_board_result(mcts.root_node->board) != 0)
@@ -612,7 +530,7 @@ struct Worker {
 
 	bool response_filled;
 	double response_value;
-	float response_posterior[7 * 7 * 17];
+	float response_posterior[POSTERIOR_SIZE];
 
 	Worker(int thread_id)
 		: t(Worker::thread_main, thread_id) {}
@@ -629,10 +547,12 @@ struct Worker {
 				cout << "Skipping game with null result." << endl;
 				continue;
 			}
+#ifdef ONE_RANDOM_MOVE
 			if (game["random_ply"].get<int>() + 1 >= game["moves"].size()) {
 				cout << "Skipping game with no board state just after the uniformly random move." << endl;
 				continue;
 			}
+#endif
 			{
 				std::lock_guard<std::mutex> global_lock(global_mutex);
 				cout << thread_id << " Game generated. Plies: " << game["moves"].size() << endl;
@@ -650,8 +570,8 @@ std::pair<const float*, double> request_evaluation(int thread_id, const float* f
 		int slot_index = fill_levels[current_buffer]++;
 		assert(0 <= slot_index and slot_index < response_slots[0].size());
 		// Copy our features into the big buffer.
-		float* destination = global_fill_buffers[current_buffer] + (7 * 7 * 4) * slot_index;
-		std::copy(feature_string, feature_string + (7 * 7 * 4), destination);
+		float* destination = global_fill_buffers[current_buffer] + FEATURES_SIZE * slot_index;
+		std::copy(feature_string, feature_string + FEATURES_SIZE, destination);
 		// Place an entry requesting a reply.
 		response_slots[current_buffer].at(slot_index).thread_id = thread_id;
 		// Set that we're waiting on a response.
@@ -724,8 +644,8 @@ extern "C" void complete_workload(int workload, float* posteriors, float* values
 		ResponseSlot& slot = response_slots[workload].at(i);
 		Worker& worker = *global_workers_by_id.at(slot.thread_id);
 		worker.response_value = values[i];
-		std::copy(posteriors, posteriors + (7 * 7 * 17), worker.response_posterior);
-		posteriors += (7 * 7 * 17);
+		std::copy(posteriors, posteriors + POSTERIOR_SIZE, worker.response_posterior);
+		posteriors += POSTERIOR_SIZE;
 		{
 			std::lock_guard<std::mutex> lk(worker.thread_mutex);
 			worker.response_filled = true;

@@ -3,7 +3,7 @@
 import os, glob, json, random
 import tensorflow as tf
 import numpy as np
-import ataxx_rules
+import chomp_rules
 import uai_interface
 import engine
 import model
@@ -109,14 +109,13 @@ if __name__ == "__main__":
 	test_entries = entries[:10]
 	train_entries = entries[10:]
 
-	network = model.Network("training_net/", build_training=True)
-	sess = tf.InteractiveSession()
+	network = model.Network("net/", build_training=True)
+	sess = tf.Session()
 	sess.run(tf.initialize_all_variables())
-	model.sess = sess
 
 	if args.old_path != None:
 		print "Loading old model."
-		model.load_model(network, args.old_path)
+		model.load_model(sess, args.old_path)
 	else:
 		print "WARNING: Not loading a previous model!"
 
@@ -131,7 +130,8 @@ if __name__ == "__main__":
 
 	# Choose the test set deterministically.
 	random.seed(123456789)
-	in_sample_val_set = make_minibatch(test_entries, 2048)
+	if args.steps:
+		in_sample_val_set = make_minibatch(test_entries, 2048)
 
 	print
 	print "Model dimensions: %i filters, %i blocks, %i parameters." % (model.Network.FILTERS, model.Network.BLOCK_COUNT, network.total_parameters)
@@ -154,5 +154,5 @@ if __name__ == "__main__":
 		network.train(minibatch, learning_rate=args.learning_rate)
 
 	# Write out the trained model.
-	model.save_model(network, args.new_path)
+	model.save_model(sess, args.new_path)
 

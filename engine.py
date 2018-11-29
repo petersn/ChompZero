@@ -3,7 +3,7 @@
 import logging, time, sys, random, collections
 import numpy as np
 import tensorflow as tf
-import ataxx_rules
+import chomp_rules
 import model
 import uai_interface
 
@@ -18,10 +18,9 @@ def initialize_model(path):
 	global network, sess, initialized
 	assert not initialized
 	network = model.Network("net/", build_training=False)
-	sess = tf.InteractiveSession()
+	sess = tf.Session()
 	sess.run(tf.initialize_all_variables())
-	model.sess = sess
-	model.load_model(network, path)
+	model.load_model(sess, path)
 	initialized = True
 
 def setup_evaluator(use_rpc=False, temperature=0.0):
@@ -51,29 +50,15 @@ def softmax(logits):
 
 def board_to_features(board):
 	features = np.zeros(
-		(model.BOARD_SIZE, model.BOARD_SIZE, model.Network.INPUT_FEATURE_COUNT),
+		(model.Network.BOARD_SIZE, model.Network.BOARD_SIZE, model.Network.INPUT_FEATURE_COUNT),
 		dtype=np.int8,
 	)
-	for y in xrange(model.BOARD_SIZE):
-		for x in xrange(model.BOARD_SIZE):
+	for y in xrange(model.Network.BOARD_SIZE):
+		for x in xrange(model.Network.BOARD_SIZE):
 			# Fill layer 0 will ones, to help the convolution out.
 			features[x, y, 0] = 1
-			# Put the piece into a layer 1 if it's of the player to move, and otherwise layer 2.
-			piece = board[x, y]
-			layer_index = {
-				0: 0,
-				board.to_move: 1,
-				ataxx_rules.OTHER_PLAYER[board.to_move]: 2,
-			}[piece]
-			features[x, y, layer_index] = 1
-			# Finally, fill layer 3 with a 1 where blocked cells are.
-			if (x, y) in ataxx_rules.BLOCKED_CELLS:
-				features[x, y, 3] = 1
+			features[x, y, 1] = board[x, y]
 	return features
-
-position_delta_layers = {delta: i for i, delta in enumerate(ataxx_rules.FAR_NEIGHBOR_OFFSETS)}
-assert len(position_delta_layers) == 16
-FAR_NEIGHBOR_OFFSETS_SET = frozenset(ataxx_rules.FAR_NEIGHBOR_OFFSETS)
 
 def add_move_to_heatmap(heatmap, move, coef=1):
 	# TODO: DRY this with the below code.
@@ -86,6 +71,7 @@ def add_move_to_heatmap(heatmap, move, coef=1):
 		heatmap[end[0], end[1], layer] += coef
 
 def encode_move_as_heatmap(move):
+	assert False
 	heatmap = np.zeros(
 		(model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES),
 		dtype=np.int8,
@@ -95,6 +81,7 @@ def encode_move_as_heatmap(move):
 	return heatmap
 
 def get_move_score(softmaxed_posterior, move):
+	assert False
 	assert softmaxed_posterior.shape == (7, 7, 17)
 	if move == "pass":
 		return 1.0
@@ -109,11 +96,13 @@ def get_move_score(softmaxed_posterior, move):
 		return softmaxed_posterior[end[0], end[1], layer]
 
 def add_noise_to_logits(raw_posterior, temperature):
+	assert False
 	assert raw_posterior.shape == (model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES)
 	noise = np.random.randn(model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES) * temperature
 	return raw_posterior + noise
 
 def add_dirichlet_noise_to_posterior(posterior, alpha, weight):
+	assert False
 	noise = np.random.dirichlet([alpha] * len(posterior))
 	posterior = {
 		move: (1.0 - weight) * prob + weight * n

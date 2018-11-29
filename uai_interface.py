@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import sys, string
-import ataxx_rules
+import chomp_rules
 import engine
 
 if __name__ == "__main__":
