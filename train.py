@@ -120,7 +120,7 @@ if __name__ == "__main__":
 
 	print
 	print "Model dimensions: %i filters, %i blocks, %i parameters." % (model.Network.FILTERS, model.Network.BLOCK_COUNT, network.total_parameters)
-	print "Have %i augmented samples, and sampling %i in total." % (ply_count * 8, args.steps * args.minibatch_size)
+	print "Have %i augmented samples, and sampling %i in total." % (ply_count * 2, args.steps * args.minibatch_size)
 	print "=== BEGINNING TRAINING ==="
 
 	# Begin training.

@@ -25,7 +25,7 @@ using std::shared_ptr;
 using std::cout;
 using std::endl;
 
-constexpr double exploration_parameter = 1.0;
+constexpr double exploration_parameter = 3.0;
 constexpr double dirichlet_alpha = 0.15;
 constexpr double dirichlet_weight = 0.25;
 constexpr int maximum_game_plies = 400;

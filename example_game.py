@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 import os, time, random, json, argparse, pprint, logging
-import ataxx_rules
+import chomp_rules
 import engine
 
 logging.basicConfig(
@@ -10,14 +10,15 @@ logging.basicConfig(
 )
 
 def generate_game(args):
-	board = ataxx_rules.AtaxxState.initial()
+	config = chomp_rules.ChompGameConfig(16, 16)
+	board = chomp_rules.ChompState.empty_board(config)
 	e = engine.MCTSEngine()
 	while True:
 		print board
 		selected_move = e.genmove(1.0, early_out=False, use_weighted_exponent=5.0)
-		board.move(selected_move)
+		board.apply_move(selected_move)
 		e.set_state(board.copy())
-		if board.result() != None:
+		if board.winner != None:
 			break
 		raw_input(">")
 
