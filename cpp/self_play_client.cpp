@@ -29,6 +29,10 @@ constexpr double exploration_parameter = 3.0;
 constexpr double dirichlet_alpha = 0.15;
 constexpr double dirichlet_weight = 0.25;
 constexpr int maximum_game_plies = 400;
+const std::vector<double> opening_randomization_schedule {
+	0.75, 0.75,
+};
+
 
 constexpr int FEATURES_SIZE = BOARD_SIZE * BOARD_SIZE * 2;
 constexpr int POSTERIOR_SIZE = BOARD_SIZE * BOARD_SIZE;
@@ -469,7 +473,6 @@ json generate_game(int thread_id) {
 		}
 #endif
 
-/*
 		// If appropriate choose a uniformly random legal move in the opening.
 		if (ply < opening_randomization_schedule.size() and
 		    std::uniform_real_distribution<double>{0, 1}(generator) < opening_randomization_schedule[ply]) {
@@ -479,7 +482,7 @@ json generate_game(int thread_id) {
 			std::advance(it, random_index);
 			selected_move = (*it).first;
 		}
-*/
+
 		entry["boards"].push_back(serialize_board_for_json(mcts.root_board));
 		entry["moves"].push_back(move_for_json(selected_move));
 		entry["dists"].push_back({});
