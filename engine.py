@@ -420,7 +420,8 @@ class MCTSEngine:
 	MAX_STEPS_PER_SECOND = 1500.0
 
 	def __init__(self):
-		self.state = ataxx_rules.AtaxxState.initial()
+		config = chomp_rules.ChompGameConfig(model.BOARD_SIZE, model.BOARD_SIZE)
+		self.state = chomp_rules.ChompState.empty_board(config)
 		self.mcts = MCTS(self.state)
 
 	def set_state(self, new_board):
