@@ -62,7 +62,7 @@ def board_to_features(board):
 
 def add_move_to_heatmap(heatmap, move, coef=1):
 	x, y = move
-	headmap[x, y] += coef
+	heatmap[x, y] += coef
 
 def encode_move_as_heatmap(move):
 	assert False
