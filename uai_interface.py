@@ -34,7 +34,8 @@ def main(args):
 		elif line.startswith("moves "):
 			for move in line[6:].split():
 				move = uai_decode_move(move)
-				board.move(move)
+				print "MOVE:", move
+				board.apply_move(move)
 			eng.set_state(board.copy())
 		elif line.startswith("go movetime "):
 			ms = int(line[12:])

@@ -1,10 +1,16 @@
 #!/usr/bin/python
 
-import sys, random, string, subprocess, atexit, time, datetime, itertools
+import os, sys, random, string, subprocess, atexit, time, datetime, itertools
 import uai_interface
-import ataxx_rules
+import chomp_rules
+import model
 
-OPENING_DEPTH = 4
+OPENING_DEPTH = 2
+
+def make_initial():
+	return chomp_rules.ChompState.empty_board(
+		chomp_rules.ChompGameConfig(model.BOARD_SIZE, model.BOARD_SIZE),
+	)
 
 class UAIPlayer:
 	def __init__(self, cmd):
@@ -64,8 +70,8 @@ class UAIPlayer:
 				break
 			lines.append(line)
 		s = "".join(lines)
-		s = s.replace("X", ataxx_rules.RED + "X" + ataxx_rules.ENDC)
-		s = s.replace("O", ataxx_rules.BLUE + "O" + ataxx_rules.ENDC)
+#		s = s.replace("X", ataxx_rules.RED + "X" + ataxx_rules.ENDC)
+#		s = s.replace("O", ataxx_rules.BLUE + "O" + ataxx_rules.ENDC)
 		return s
 
 def play_one_game(args, engine1, engine2, opening_moves):
@@ -83,26 +89,27 @@ def play_one_game(args, engine1, engine2, opening_moves):
 	}
 
 	players = [UAIPlayer(engine1), UAIPlayer(engine2)]
-	board = ataxx_rules.AtaxxState.initial()
+#	board = ataxx_rules.AtaxxState.initial()
+	board = make_initial()
 	ply_number = 0
 
 	def print_state():
 		if args.show_games:
 			print
 			print "===================== Player %i move." % (ply_number % 2 + 1,)
-			print "[%3i plies] Score: %2i - %2i" % (ply_number, board.board.count(1), board.board.count(2))
-			print board.fen()
+			print "[%3i plies] Open: %2i  " % (ply_number, sum(board.limits))
+			#print board.fen()
 			print board
 		else:
-			print "\r[%3i plies] Score: %2i - %2i " % (ply_number, board.board.count(1), board.board.count(2)),
+			print "\r[%3i plies] Open: %2i  " % (ply_number, sum(board.limits)),
 			sys.stdout.flush()
 
-	while board.result() == None:
+	while board.winner == None:
 		print_state()
 		# If there is only one legal move then force it.
 		if ply_number < len(opening_moves):
 			move = opening_moves[ply_number]
-		elif len(board.legal_moves()) == 1:
+		elif len(list(board.legal_moves())) == 1:
 			move, = board.legal_moves()
 		else:
 			ms = int(args.tc * 1000)
@@ -110,13 +117,13 @@ def play_one_game(args, engine1, engine2, opening_moves):
 		if args.show_games:
 			print "Move:", uai_interface.uai_encode_move(move)
 		try:
-			board.move(move)
+			board.apply_move(move)
 		except Exception as e:
 			print "Exception:", e
 			print move
 			print board
 			print game
-			print board.fen()
+			#print board.fen()
 			print uai_interface.uai_encode_move(move)
 			raise e
 		game["moves"].append(move)
@@ -131,12 +138,12 @@ def play_one_game(args, engine1, engine2, opening_moves):
 	for player in players:
 		player.quit()
 
-	result = board.result()
+	result = board.winner
 	if result == None:
 		result = "invalid"
 	game["result"] = result
 	game["end_time"] = time.time()
-	game["final_score"] = board.board.count(1), board.board.count(2)
+#	game["final_score"] = board.board.count(1), board.board.count(2)
 
 	print_state()
 	# Print a final newline to finish the line we're "\r"ing over and over.
@@ -159,7 +166,7 @@ def write_game_to_pgn(args, path, game, round_index=1):
 		print >>f, '[Plycount "%i"]' % (len(game["moves"]),)
 		result_string = {1: "1-0", 2: "0-1", "invalid": "1/2-1/2"}[game["result"]]
 		print >>f, '[Result "%s"]' % (result_string,)
-		print >>f, '[FinalScore "%i-%i"]' % game["final_score"]
+#		print >>f, '[FinalScore "%i-%i"]' % game["final_score"]
 		print >>f, '[TimeControl "+%r"]' % (args.tc,)
 		print >>f
 		print >>f, " ".join(map(uai_interface.uai_encode_move, game["moves"]))
@@ -173,12 +180,17 @@ def get_opening(args):
 		if not args.opening.strip():
 			return []
 		return [uai_interface.uai_decode_move(m.strip()) for m in args.opening.split(",")]
-	board = ataxx_rules.AtaxxState.initial()
+	board = make_initial()
+	#board = ataxx_rules.AtaxxState.initial()
 	opening_moves = []
 	for _ in xrange(OPENING_DEPTH):
-		move = random.choice(board.legal_moves())
+		valid_moves = [
+			move for move in board.legal_moves()
+			if sum(move) > 10
+		]
+		move = random.choice(valid_moves)
 		opening_moves.append(move)
-		board.move(move)
+		board.apply_move(move)
 	return opening_moves
 
 if __name__ == "__main__":
@@ -191,11 +203,31 @@ if __name__ == "__main__":
 	parser.add_argument("--pgn-out", metavar="PATH", type=str, default=None, help="PGN file path to accumulate games into. Writes in append mode.")
 	parser.add_argument("--gauntlet", action="store_true", help="Just the first engine plays against all the other engines.")
 	parser.add_argument("--tc", metavar="SEC", type=float, default=1.0, help="Seconds per move for all engines.")
+	parser.add_argument("--model-pattern", metavar="PATTERN", type=str, help="Pattern containing a %i that should be used to find the various models.")
 	args = parser.parse_args()
 	print "Options:", args
 
-	print "Engines:"
+	if args.engine is None:
+		args.engine = []
+
 	engines = map(tuple, map(shlex.split, args.engine))
+
+	# Add all the enumerated engines.
+	if args.model_pattern:
+		model_number = 1
+		while True:
+			test_path = args.model_pattern % (model_number,)
+			if os.path.exists(test_path):
+				engines.append((
+					"python", "uai_interface.py",
+						"--visits", "1000",
+						"--network-path", test_path,
+				))
+				model_number += 1
+			else:
+				break
+
+	print "Engines:"
 	for i, engine in enumerate(engines):
 		print "%4i: %s" % (i + 1, engine)
 

@@ -295,7 +295,7 @@ class TopN:
 			self.add(i)
 
 class MCTS:
-	exploration_parameter = 1.0
+	exploration_parameter = 3.0
 
 	def __init__(self, root_board, use_dirichlet_noise=False):
 		self.root_node = MCTSNode(root_board.copy())
