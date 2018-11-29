@@ -98,7 +98,7 @@ if __name__ == "__main__":
 
 		if args.pgn_out:
 			print "Writing games."
-			write_game_to_pgn(args, args.pgn_out, game1, round_index=games_written + 1)
-			write_game_to_pgn(args, args.pgn_out, game2, round_index=games_written + 2)
+			uai_ringmaster.write_game_to_pgn(args, args.pgn_out, game1, round_index=games_written + 1)
+			uai_ringmsater.write_game_to_pgn(args, args.pgn_out, game2, round_index=games_written + 2)
 			games_written += 2
 
