@@ -50,25 +50,19 @@ def softmax(logits):
 
 def board_to_features(board):
 	features = np.zeros(
-		(model.Network.BOARD_SIZE, model.Network.BOARD_SIZE, model.Network.INPUT_FEATURE_COUNT),
+		(model.BOARD_SIZE, model.BOARD_SIZE, model.Network.INPUT_FEATURE_COUNT),
 		dtype=np.int8,
 	)
-	for y in xrange(model.Network.BOARD_SIZE):
-		for x in xrange(model.Network.BOARD_SIZE):
+	for y in xrange(model.BOARD_SIZE):
+		for x in xrange(model.BOARD_SIZE):
 			# Fill layer 0 will ones, to help the convolution out.
 			features[x, y, 0] = 1
 			features[x, y, 1] = board[x, y]
 	return features
 
 def add_move_to_heatmap(heatmap, move, coef=1):
-	# TODO: DRY this with the below code.
-	start, end = move
-	if start == "c":
-		heatmap[end[0], end[1], model.MOVE_TYPES - 1] += coef
-	else:
-		delta = end[0] - start[0], end[1] - start[1]
-		layer = position_delta_layers[delta]
-		heatmap[end[0], end[1], layer] += coef
+	x, y = move
+	headmap[x, y] += coef
 
 def encode_move_as_heatmap(move):
 	assert False

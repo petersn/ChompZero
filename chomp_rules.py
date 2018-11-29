@@ -7,17 +7,17 @@ ChompGameConfig = collections.namedtuple("ChompGameConfig", ["width", "height"])
 OTHER_PLAYER = {1: 2, 2: 1}
 
 class ChompState:
-	def __init__(self, config, limits, to_move=1):
+	def __init__(self, config, limits, to_move=1, winner=None):
 		self.config = config
 		self.limits = limits
 		self.to_move = to_move
-		self.winner = None
+		self.winner = winner
 
 	@staticmethod
 	def empty_board(config):
 		return ChompState(
 			config=config,
-			limits={y: config.width for y in xrange(config.height)},
+			limits=[config.width for y in xrange(config.height)],
 			to_move=1,
 		)
 
@@ -38,6 +38,14 @@ class ChompState:
 				for x in xrange(self.config.width)
 			 )
 			 for y in reversed(xrange(self.config.height))
+		)
+
+	def copy(self):
+		return ChompState(
+			self.config,
+			self.limits[:],
+			self.to_move,
+			self.winner,
 		)
 
 	def apply_move(self, xy):

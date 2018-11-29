@@ -4,72 +4,55 @@ import os, glob, json, random
 import tensorflow as tf
 import numpy as np
 import chomp_rules
-import uai_interface
 import engine
 import model
 
 def apply_symmetry(index, arr):
-	assert len(arr.shape) == 3 and arr.shape[:2] == (model.BOARD_SIZE, model.BOARD_SIZE)
-	assert index in xrange(8)
-	coin1, coin2, coin3 = index & 1, (index >> 1) & 1, (index >> 2) & 1
+	assert arr.shape == (model.BOARD_SIZE, model.BOARD_SIZE, model.FEATURE_COUNT)
+	assert index in xrange(2)
 	# Break views to avoid mutating our input.
-	arr = np.array(arr).copy()
-	if coin1:
-		arr = arr[::-1,:,:].copy()
-	if coin2:
-		arr = arr[:,::-1,:].copy()
-	if coin3:
-		arr = np.swapaxes(arr.copy(), 0, 1).copy()
-	return arr
+	if index:
+		return np.swapaxes(arr.copy(), 0, 1).copy()
+	else:
+		return arr.copy()
 
 def apply_symmetry_to_move(index, move):
-	assert index in xrange(8)
-	coin1, coin2, coin3 = index & 1, (index >> 1) & 1, (index >> 2) & 1
-	def apply_to_coord(xy):
-		x, y = xy
-		if coin1:
-			x = (model.BOARD_SIZE - 1) - x
-		if coin2:
-			y = (model.BOARD_SIZE - 1) - y
-		if coin3:
-			x, y = y, x
-		return x, y
-	start, end = move
-	if start == "c":
-		return "c", apply_to_coord(end)
-	return apply_to_coord(start), apply_to_coord(end)
+	assert index in xrange(2)
+	x, y = move
+	return (y, x) if index else (x, y)
+
+def decode_move(s):
+	x, y = map(int, s.split(","))
+	return x, y
 
 # WARNING: Loops infinitely if there are no games with no non-passing moves.
 def get_sample_from_entries(entries):
 	while True:
 		entry = random.choice(entries)
 		ply = random.randrange(len(entry["boards"]))
-		if "random_ply" in entry:
-			# Note that we need the +1 because we want to train on the board state just AFTER the random move was performed.
-			ply = entry["random_ply"] + 1
 		to_move = 1 if ply % 2 == 0 else 2
-		board = ataxx_rules.AtaxxState(entry["boards"][ply], to_move=to_move).copy()
-		move  = entry["moves"][ply]
-		if move == "pass":
-			continue
+#		board = ataxx_rules.AtaxxState(entry["boards"][ply], to_move=to_move).copy()
+		board = chomp_rules.ChompState(entry["boards"][ply], to_move=to_move).copy()
+		move_string = entry["moves"][ply]
+		move = decode_move(move_string)
 		# Convert the board into encoded features.
 		features = engine.board_to_features(board)
 		desired_value = [1 if entry["result"] == to_move else -1]
-		# Apply a dihedral symmetry.
-		symmetry_index = random.randrange(8)
+		# Optionally apply a symmetry.
+		symmetry_index = random.randrange(2)
 		features = apply_symmetry(symmetry_index, features)
 		# Build up a map of the desired result.
 		desired_policy = np.zeros(
-			(model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES),
+			(model.BOARD_SIZE, model.BOARD_SIZE),
 			dtype=np.float32,
 		)
 		if "dists" not in entry:
-			distribution = {uai_interface.uai_encode_move(move): 1}
+			distribution = {move_string: 1}
 		else:
 			distribution = entry["dists"][ply]
 		for move, probability in distribution.iteritems():
 			if isinstance(move, (str, unicode)):
-				move = uai_interface.uai_decode_move(move)
+				move = decode_move(move)
 			move = apply_symmetry_to_move(symmetry_index, move)
 			engine.add_move_to_heatmap(desired_policy, move, probability)
 		assert abs(1 - desired_policy.sum()) < 1e-3

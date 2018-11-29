@@ -7,12 +7,13 @@ import tensorflow as tf
 #DTYPE = tf.float16
 DTYPE = tf.float32
 
+FEATURE_COUNT = 2
+BOARD_SIZE = 16
+
 class Network:
-	INPUT_FEATURE_COUNT = 2
 	FILTERS = 32
 	CONV_SIZE = 3
 	BLOCK_COUNT = 8
-	BOARD_SIZE = 16
 	FINAL_FILTERS = 2
 	OUTPUT_SOFTMAX_COUNT = BOARD_SIZE * BOARD_SIZE
 
@@ -27,12 +28,12 @@ class Network:
 	def build_graph(self):
 		self.input_ph = tf.placeholder(
 			dtype=DTYPE,
-			shape=[None, self.BOARD_SIZE, self.BOARD_SIZE, self.INPUT_FEATURE_COUNT],
+			shape=[None, BOARD_SIZE, BOARD_SIZE, FEATURE_COUNT],
 			name="input_ph",
 		)
 		self.desired_policy_ph = tf.placeholder(
 			dtype=DTYPE,
-			shape=[None, self.BOARD_SIZE, self.BOARD_SIZE],
+			shape=[None, BOARD_SIZE, BOARD_SIZE],
 			name="desired_policy_ph",
 		)
 		self.desired_value_ph = tf.placeholder(
@@ -56,7 +57,7 @@ class Network:
 		self.flow = self.input_ph
 		# Stack an initial convolution.
 		with tf.variable_scope("promote"):
-			self.stack_convolution(3, self.INPUT_FEATURE_COUNT, self.FILTERS)
+			self.stack_convolution(3, FEATURE_COUNT, self.FILTERS)
 			self.stack_nonlinearity()
 		# Stack some number of residual blocks.
 		for i in xrange(self.BLOCK_COUNT):
@@ -65,14 +66,14 @@ class Network:
 		# Stack a final batch-unnormalized 1x1 convolution down to some given number of filters.
 		# The first feature is the policy layer, while the remaining are features for value head computation.
 		self.stack_convolution(1, self.FILTERS, self.FINAL_FILTERS, batch_normalization=False)
-		#assert self.flow.shape == [None, self.BOARD_SIZE, self.BOARD_SIZE, self.FINAL_FILTERS]
-		self.policy_output = tf.reshape(self.flow[:,:,:,0], [-1, self.BOARD_SIZE, self.BOARD_SIZE])
+		#assert self.flow.shape == [None, BOARD_SIZE, BOARD_SIZE, self.FINAL_FILTERS]
+		self.policy_output = tf.reshape(self.flow[:,:,:,0], [-1, BOARD_SIZE, BOARD_SIZE])
 
 		self.build_value_head()
 
 	def build_value_head(self):
 		with tf.variable_scope("value_head"):
-			x = tf.reshape(self.flow, [-1, self.BOARD_SIZE * self.BOARD_SIZE * self.FINAL_FILTERS])
+			x = tf.reshape(self.flow, [-1, BOARD_SIZE * BOARD_SIZE * self.FINAL_FILTERS])
 			x = tf.layers.dense(x, 32, activation="relu")
 			self.value_output = tf.layers.dense(x, 1, activation="tanh")
 
