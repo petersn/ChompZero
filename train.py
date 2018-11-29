@@ -126,9 +126,18 @@ if __name__ == "__main__":
 	# Begin training.
 	for step_number in xrange(args.steps):
 		if step_number % 100 == 0:
-			policy_loss = network.run_on_samples(network.policy_loss.eval, in_sample_val_set)
-			value_loss  = network.run_on_samples(network.value_loss.eval, in_sample_val_set)
+#			policy_loss = network.run_on_samples(network.policy_loss.eval, in_sample_val_set)
+#			value_loss  = network.run_on_samples(network.value_loss.eval, in_sample_val_set)
 #			loss = network.get_loss(in_sample_val_set)
+			policy_loss, value_loss = sess.run(
+				[network.policy_loss, network.value_loss],
+				feed_dict={
+					network.input_ph: in_sample_val_set["features"],
+					network.desired_policy_ph: in_sample_val_set["policies"],
+					network.desired_value_ph: in_sample_val_set["values"],
+					network.is_training_ph: False,
+				},
+			)
 			print "Step: %4i -- loss: %.6f  (policy: %.6f  value: %.6f)" % (
 				step_number,
 				policy_loss + value_loss,
@@ -136,7 +145,17 @@ if __name__ == "__main__":
 				value_loss,
 			)
 		minibatch = make_minibatch(train_entries, args.minibatch_size)
-		network.train(minibatch, learning_rate=args.learning_rate)
+		#network.train(minibatch, learning_rate=args.learning_rate)
+		sess.run(
+			network.train_step,
+			feed_dict={
+				network.input_ph: minibatch["features"],
+				network.desired_policy_ph: minibatch["policies"],
+				network.desired_value_ph: minibatch["values"],
+				network.is_training_ph: True,
+				network.learning_rate_ph: args.learning_rate,
+			},
+		)
 
 	# Write out the trained model.
 	model.save_model(sess, args.new_path)
