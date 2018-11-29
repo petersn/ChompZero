@@ -63,9 +63,9 @@ if __name__ == "__main__":
 
 	while True:
 		engines = enumerate_engines(args)
-		print "Engines:"
-		for i, engine in enumerate(engines):
-			print "%4i: %s" % (i + 1, engine)
+		print "Engines:", len(engines)
+#		for i, engine in enumerate(engines):
+#			print "%4i: %s" % (i + 1, engine)
 
 		model_number_to_engine = {}
 		for engine in engines:
@@ -82,12 +82,19 @@ if __name__ == "__main__":
 			if p1 < p2 and abs(p1 - p2) <= 10
 		}
 
+		games_participated_in = collections.Counter()
+		for (p1, p2), count in matchup_counts.iteritems():
+			for p in (p1, p2):
+				games_participated_in[p] += count
+
 		# Pick an arbitrary pairing that has as few games as are known.
 		min_games = min(matchup_counts.itervalues())
 		frontier = [matchup for matchup, count in matchup_counts.iteritems() if count == min_games]
 		print "Min games:", min_games, "Frontier:", frontier
 
-		p1, p2 = random.choice(frontier)
+		# Chose an arbitrary match-up whose participants have the minimum sum of games participated in.
+		random.shuffle(frontier)
+		p1, p2 = min(frontier, key=lambda (p1, p2): games_participated_in[p1] + games_participated_in[p2])
 		opening = uai_ringmaster.get_opening(args)
 
 		eng1 = model_number_to_engine[p1]
