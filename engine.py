@@ -50,7 +50,7 @@ def softmax(logits):
 
 def board_to_features(board):
 	features = np.zeros(
-		(model.BOARD_SIZE, model.BOARD_SIZE, model.Network.INPUT_FEATURE_COUNT),
+		(model.BOARD_SIZE, model.BOARD_SIZE, model.FEATURE_COUNT),
 		dtype=np.int8,
 	)
 	for y in xrange(model.BOARD_SIZE):
