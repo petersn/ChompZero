@@ -5,7 +5,6 @@ import numpy as np
 import tensorflow as tf
 import chomp_rules
 import model
-import uai_interface
 
 RED  = "\x1b[91m"
 ENDC = "\x1b[0m"
@@ -77,7 +76,9 @@ def encode_move_as_heatmap(move):
 	return heatmap
 
 def get_move_score(softmaxed_posterior, move):
-	assert False
+	x, y = move
+	return softmaxed_posterior[x, y]
+
 	assert softmaxed_posterior.shape == (7, 7, 17)
 	if move == "pass":
 		return 1.0
@@ -92,7 +93,6 @@ def get_move_score(softmaxed_posterior, move):
 		return softmaxed_posterior[end[0], end[1], layer]
 
 def add_noise_to_logits(raw_posterior, temperature):
-	assert False
 	assert raw_posterior.shape == (model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES)
 	noise = np.random.randn(model.BOARD_SIZE, model.BOARD_SIZE, model.MOVE_TYPES) * temperature
 	return raw_posterior + noise
@@ -140,8 +140,8 @@ class NNEvaluator:
 	@staticmethod
 	def board_key(b):
 		return (
-			b.to_move,
-			tuple(b.board),
+#			b.to_move,
+			tuple(b.limits),
 		)
 
 	def __contains__(self, board):
@@ -170,7 +170,7 @@ class NNEvaluator:
 
 		# Write an entry into our cache.
 		for board, raw_posterior, (value,) in zip(ensemble, posteriors, values):
-			raw_posterior = add_noise_to_logits(raw_posterior, self.temperature)
+			#raw_posterior = add_noise_to_logits(raw_posterior, self.temperature)
 			softmax_posterior = softmax(raw_posterior)
 			posterior = {move: get_move_score(softmax_posterior, move) for move in board.legal_moves()}
 			# Renormalize the posterior. Add a small epsilon into the denominator to prevent divison by zero.
@@ -196,7 +196,7 @@ class NNEvaluator:
 		# but in that case I shouldn't be mutating the cached entry! Uh oh. I really have to look into this later.
 
 		# Evaluate special value adjustments.
-		result = board.result()
+		result = board.winner
 		if result != None:
 			assert result in (1, 2) and board.to_move in (1, 2)
 			entry.value = 1.0 if result == board.to_move else -1.0
@@ -225,7 +225,7 @@ class MCTSEdge:
 
 	def __str__(self):
 		return "<%s %4.1f%% v=%i s=%.5f c=%i>" % (
-			uai_interface.uai_encode_move(self.move),
+			str(self.move),
 			100.0 * self.parent_node.board.evaluations.posterior[self.move],
 			self.edge_visits,
 			self.get_edge_score(),
@@ -330,7 +330,7 @@ class MCTS:
 		if move != None:
 			new_board = node.board.copy()
 			try:
-				new_board.move(move)
+				new_board.apply_move(move)
 			except AssertionError, e:
 				import sys
 				print >>sys.stderr, node.board
@@ -363,7 +363,7 @@ class MCTS:
 		for m, probability in new_node.board.evaluations.posterior.iteritems():
 			if probability > NNEvaluator.PROBABILITY_THRESHOLD:
 				new_board = new_node.board.copy()
-				new_board.move(m)
+				new_board.apply_move(m)
 				global_evaluator.add_to_queue(new_board)
 		# Convert the expected value result into a score.
 		value_score = (new_node.board.evaluations.value + 1) / 2.0
@@ -388,7 +388,7 @@ class MCTS:
 			if print_variation_count:
 				logging.debug("Completely unexpected variation!")
 			new_board = self.root_node.board.copy()
-			new_board.move(move)
+			new_board.apply_move(move)
 			self.root_node = MCTSNode(new_board)
 			return
 		edge = self.root_node.outgoing_edges[move]
@@ -420,7 +420,10 @@ class MCTSEngine:
 	MAX_STEPS_PER_SECOND = 1500.0
 
 	def __init__(self):
-		self.state = ataxx_rules.AtaxxState.initial()
+		#self.state = ataxx_rules.AtaxxState.initial()
+		self.state = chomp_rules.ChompState.empty_board(
+			chomp_rules.ChompGameConfig(model.BOARD_SIZE, model.BOARD_SIZE),
+		)
 		self.mcts = MCTS(self.state)
 
 	def set_state(self, new_board):
@@ -532,7 +535,7 @@ class MCTSEngine:
 		logging.debug("PV [%2i]: %s" % (
 			len(pv),
 			" ".join(
-				["%s", RED + "%s" + ENDC][i % 2] % (uai_interface.uai_encode_move(edge.move),)
+				["%s", RED + "%s" + ENDC][i % 2] % (str(edge.move),)
 				for i, edge in enumerate(pv)
 			),
 		))
@@ -543,7 +546,8 @@ if __name__ == "__main__":
 		format="[%(process)5d] %(message)s",
 		level=logging.DEBUG,
 	)
-	initialize_model("models/96x12-sample.npy")
+	#initialize_model("models/96x12-sample.npy")
+	initialize_model("run1/models/model-001/")
 	setup_evaluator()
 	engine = MCTSEngine()
 	for _ in xrange(2):
