@@ -7,6 +7,8 @@ import chomp_rules
 import engine
 import model
 
+game_config = chomp_rules.ChompGameConfig(model.BOARD_SIZE, model.BOARD_SIZE)
+
 def apply_symmetry(index, arr):
 	assert arr.shape == (model.BOARD_SIZE, model.BOARD_SIZE, model.FEATURE_COUNT)
 	assert index in xrange(2)
@@ -32,7 +34,7 @@ def get_sample_from_entries(entries):
 		ply = random.randrange(len(entry["boards"]))
 		to_move = 1 if ply % 2 == 0 else 2
 #		board = ataxx_rules.AtaxxState(entry["boards"][ply], to_move=to_move).copy()
-		board = chomp_rules.ChompState(entry["boards"][ply], to_move=to_move).copy()
+		board = chomp_rules.ChompState(game_config, entry["boards"][ply], to_move=to_move).copy()
 		move_string = entry["moves"][ply]
 		move = decode_move(move_string)
 		# Convert the board into encoded features.
