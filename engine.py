@@ -53,11 +53,13 @@ def board_to_features(board):
 		(model.BOARD_SIZE, model.BOARD_SIZE, model.FEATURE_COUNT),
 		dtype=np.int8,
 	)
-	for y in xrange(model.BOARD_SIZE):
-		for x in xrange(model.BOARD_SIZE):
-			# Fill layer 0 will ones, to help the convolution out.
-			features[x, y, 0] = 1
-			features[x, y, 1] = board[x, y]
+	for y, limit in enumerate(board.limits):
+		features[limit:, y, 1] = 1
+#	for y in xrange(model.BOARD_SIZE):
+#		for x in xrange(model.BOARD_SIZE):
+#			# Fill layer 0 will ones, to help the convolution out.
+#			features[x, y, 0] = 1
+#			features[x, y, 1] = board[x, y]
 	return features
 
 def add_move_to_heatmap(heatmap, move, coef=1):
